@@ -1,0 +1,12 @@
+jax>=0.4.20
+jaxlib>=0.4.20
+numpy>=1.24
+pandas>=2.0
+scikit-learn>=1.3
+matplotlib>=3.7
+pyarrow>=12.0
+
+# Only needed by src.fetch_tardis when (re)building the raw 1-second mid
+# prices from Tardis.  Not required to run the experiments against the
+# shipped data/btc_5min_logrv.parquet.
+tardis-dev>=2.0
