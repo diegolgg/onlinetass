@@ -846,19 +846,6 @@ def run_methods_extended(scenario, methods=("uniform", "tass", "online"), seed=1
 def paper_exact_condition(methods, dynamic_strength, pilot_mode):
     return tuple(methods) == ("uniform", "tass") and float(dynamic_strength) == 0.0 and pilot_mode == "paper"
 
-# =============================================================================
-# Correct organic dynamic-information extension.
-#
-# This section is the intended extension.  It does NOT shift the static TASS
-# pilot.  Static TASS remains frozen at its paper-style K-means pilot.  Staleness
-# arises only because the current block-gradient importances g_n(theta_t) change
-# as theta_t moves during SGLD.
-#
-# If dynamic_strength == 0 and dynamic_component == False, use the exact
-# MATLAB/paper path above.  Positive dynamic_strength turns on a covariate-
-# informed rare-state emission component.
-# =============================================================================
-
 
 def simulate_hmm_covariate(A, mu, sigmasq, beta, T, pi0=None, seed=1,
                            x_mode="block_trend", block_len=5):

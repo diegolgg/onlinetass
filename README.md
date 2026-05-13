@@ -2,40 +2,12 @@
 
 Python/JAX implementation of online group-specific TASS, an adaptive
 extension of static TASS-HMM
-([Ou, Sen, Young, Dunson, 2024](https://arxiv.org/abs/1810.13431)) for
-buffered stochastic-gradient MCMC on hidden Markov models.
+([Ou, Sen, Young, Dunson, 2024](https://arxiv.org/abs/1810.13431))
+for buffered stochastic-gradient MCMC on hidden Markov models.
 
-Reference:
-
-> D. L. Gonzalez Gauss, E. Yao-Bate, S. Yang.
-> *Online Targeted Subsampling for Stochastic Gradient-MCMC in Hidden
-> Markov Models.*  STAT 221 Final Project, May 2026.
-
-## Abstract
-
-Stochastic-gradient MCMC for hidden Markov models replaces a costly
-full-data gradient with a sub-sampled estimate over short subsequences
-("blocks").  Uniform block sampling can miss rare or high-information
-regimes, so static TASS overweights blocks expected to carry rare-state
-evidence using K-means proxy labels.  Those weights, however, are
-computed once at a pilot parameter value and become stale as MCMC moves
-θ away from the pilot.
-
-We propose **Online Group-Specific TASS**: maintain one discounted-ridge
-predictor per parameter group, fit each predictor's log-importance score
-on observed block-gradient feedback as the sampler runs, and use the
-resulting per-group weights to sample blocks.  Theoretically, online
-TASS pays a learning penalty that grows slowly with prediction error
-while static TASS pays a chi-square staleness penalty that can grow
-without bound.  Empirically, on a real BTC futures volatility HMM,
-online TASS reduces the gradient-RMSE oracle ratio by roughly an order
-of magnitude at the most adverse perturbation in the paper's sweep.
-
-## Getting Started
+## Install
 
 ```bash
-git clone <repo-url>
-cd online-tass-hmm
 pip install -r requirements.txt
 python tass_online_demo.py
 ```
@@ -43,8 +15,25 @@ python tass_online_demo.py
 Dependencies: JAX, NumPy, pandas, scikit-learn, matplotlib, pyarrow.
 Python 3.10+.
 
-The online group-specific TASS gradient estimator lives in
-`src/benchmark.py` and is called as
+## Repository layout
+
+| Path | What it is |
+|------|-----------|
+| `src/hmm.py` | JAX forward–backward, buffered block log-likelihood gradients (`make_full_grad_fn`, `make_buffered_block_grad_fn`). |
+| `src/features.py` | Block partitioning + per-block features (`partition_blocks`, `compute_block_features`). |
+| `src/simulator.py` | Synthetic K-state Gaussian HMM generator (`make_three_state_rare_gaussian_hmm`, `simulate_hmm_stationary`, `params_from_spec`). |
+| `src/samplers.py` | Proxy K-means weights and the online learner (`build_proxy_weight_bundle`, `DiscountedRidge`, `GroupedOnlineTASS`). |
+| `src/benchmark.py` | The six samplers compared in the paper (`uniform_stochastic_grad`, `static_group_tass_grad`, `static_component_tass_grad`, `online_group_tass_grad`), the oracle bundle (`compute_oracle_weight_bundle`), and the RMSE evaluator (`gradient_rmse`). |
+| `src/fetch_tardis.py`, `src/build_btc_1s.py`, `src/data_prep.py` | Real-data pipeline: download Tardis CSVs → 1-second mid-price parquet → 5-minute deseasonalized log-RV parquet. |
+| `examples/changepoint_synthetic.py` | Sections 5.1 / 6.1.  Self-contained — does not import from `src/`. |
+| `examples/practical_proxy_sweep.py` | Sections 5.2 / 6.2.  Uses `src/`. |
+| `examples/real_btc_sweep.py` | Sections 5.3 / 6.3.  Uses `src/`. |
+| `tass_online_demo.py` | Quick-start.  Uses `src/`. |
+| `run_all.sh` | End-to-end orchestrator. |
+
+## API reference
+
+The online estimator is one function call: `online_group_tass_grad`.
 
 ```python
 g_hat, info = online_group_tass_grad(
@@ -60,7 +49,7 @@ g_hat, info = online_group_tass_grad(
 )
 ```
 
-#### Inputs
+Arguments:
 
 | Variable | Explanation |
 |----------|-------------|
@@ -74,7 +63,7 @@ g_hat, info = online_group_tass_grad(
 | `prior_grad_fn` | Returned by `make_prior_grad_fn()`; computes the log-prior gradient. |
 | `update_models` | If `True`, the per-group ridge predictors are updated with the new feedback. |
 
-#### Outputs
+Returns:
 
 | Variable | Explanation |
 |----------|-------------|
@@ -82,17 +71,19 @@ g_hat, info = online_group_tass_grad(
 | `info["mean"][k]` | Array of block indices sampled for the emission-mean group of state `k`. |
 | `info["trans"][k]` | Array of block indices sampled for the transition-row group of state `k`. |
 
-The `GroupedOnlineTASS` constructor exposes the four hyperparameters of
-the online learner:
+`GroupedOnlineTASS` constructor defaults are
+`ridge=5.0`, `discount=0.995`, `lambda_floor=0.05`, `feedback_eps=1e-8`;
+the paper experiments override `ridge=50.0` and `discount=0.99` (see
+the [Parameter tuning](#parameter-tuning) section below).
 
 | Hyperparameter | Default | Role |
 |----------------|---------|------|
-| `discount` ρ | `0.99` | Sufficient-statistic decay for the ridge recursion (smaller ρ tracks faster but is noisier). |
-| `ridge` τ | `50.0` | ℓ₂ penalty on β̂ in the discounted ridge fit. |
+| `discount` ρ | `0.995` | Sufficient-statistic decay for the ridge recursion (smaller ρ tracks faster but is noisier). |
+| `ridge` τ | `5.0` | ℓ₂ penalty on β̂ in the discounted ridge fit. |
 | `lambda_floor` λ | `0.05` | Uniform-floor mixing: final probability is `(1 − λ) · softmax(w·β) + λ/N`. |
 | `feedback_eps` ε | `1e-8` | Numerical floor inside `log(‖g‖² + ε)` so empty blocks don't NaN. |
 
-## Basic Demo
+## Minimal example
 
 ```python
 import jax, jax.numpy as jnp
@@ -152,23 +143,29 @@ print("Online TASS gradient RMSE at the pilot:", rmse_online)
 
 The runnable version is `tass_online_demo.py` at the repository root.
 
-## Sample results from paper
+## Paper experiments
 
-Three paper-reproduction scripts live in `examples/`:
+Three reproduction scripts live in `examples/`.  Each writes a fresh
+timestamped subdirectory under `runs/...` containing CSV results and
+PNG figures.
 
-| File | Section | What it produces |
-|------|---------|------------------|
-| `examples/changepoint_synthetic.py` | §5.1 / §6.1 | Held-out log-predictive density on the 1-rare and 2-rare changepoint regimes (Tables 1, 2; Figures 1, 2). |
-| `examples/practical_proxy_sweep.py`  | §5.2 / §6.2 | Oracle-ratio sweep on the stationary K=3 HMM (Table 3; Figures 3, 4, 5). |
-| `examples/real_btc_sweep.py`         | §5.3 / §6.3 | Oracle-ratio sweep on real BTC log-RV (Table 4; Figures 6, 7, 8). |
+| File | Paper section | Imports from `src/` | What it produces |
+|------|---------------|---------------------|------------------|
+| `examples/changepoint_synthetic.py` | 5.1 / 6.1 | none — self-contained | Held-out log-predictive density on the 1-rare and 2-rare changepoint regimes (Tables 1, 2; Figures 1, 2). |
+| `examples/practical_proxy_sweep.py` | 5.2 / 6.2 | `simulator`, `features`, `hmm`, `samplers`, `benchmark` | Oracle-ratio sweep on the stationary K=3 HMM (Table 3; Figures 3, 4, 5). |
+| `examples/real_btc_sweep.py`         | 5.3 / 6.3 | `features`, `hmm`, `samplers`, `benchmark` | Oracle-ratio sweep on real BTC log-RV (Table 4; Figures 6, 7, 8). |
 
-Each script writes a fresh timestamped subdirectory under `runs/...`
-containing CSV results and PNG figures.  Wall-clock budgets on a modern
-desktop CPU are roughly a few minutes for the changepoint script,
-~4 h for the K=3 synthetic sweep, and ~3 h for the real-data sweep.
-Each script's top-of-file docstring names the corresponding paper sections.
+Wall-clock budgets on a modern desktop CPU are roughly a few minutes
+for the changepoint script, ~4 h for the K=3 synthetic sweep, and ~3 h
+for the real-data sweep.  Each script's top-of-file docstring names the
+corresponding paper sections.
 
-## End-to-end reproduction
+The changepoint script does its own SGLD chain sampling and held-out
+predictive density evaluation inline (Colab-derived development
+history), which is why it does not share the `src/` machinery.  The two
+gradient-RMSE sweeps are built on `src/` end to end.
+
+## Full pipeline
 
 `run_all.sh` chains every step together.  Two common patterns:
 
@@ -179,11 +176,11 @@ Each script's top-of-file docstring names the corresponding paper sections.
 ```
 
 Runs `tass_online_demo.py` → practical-proxy sweep → real-BTC sweep →
-changepoint notebook, all against `data/btc_5min_logrv.parquet` that
+changepoint script, all against `data/btc_5min_logrv.parquet` that
 ships with the repository.  Total wall-clock about 7 hours on a modern
 desktop CPU; can be restricted with `--skip` (e.g.
 `./run_all.sh --skip practical real` for just the demo + changepoint
-notebook, ~30 min total).
+script, ~30 min total).
 
 **Rebuild data from raw Tardis CSVs first.**
 
@@ -202,11 +199,12 @@ key.
 ## Parameter tuning
 
 The defaults
-`GroupedOnlineTASS(ridge=50.0, discount=0.99, lambda_floor=0.05, feedback_eps=1e-8)`
-together with the block hyperparameters used in the paper were chosen
-by the rules of thumb below.  Each group's hyperparameters could in
-principle be tuned independently, but for all paper experiments we use
-the same value for every group.
+`GroupedOnlineTASS(ridge=5.0, discount=0.995, lambda_floor=0.05, feedback_eps=1e-8)`
+together with the block hyperparameters used in the paper experiments
+(`ridge=50.0`, `discount=0.99`) were chosen by the rules of thumb
+below.  Each group's hyperparameters could in principle be tuned
+independently, but for all paper experiments we use the same value for
+every group.
 
 **Block geometry (`half_width` h, `buffer` B).**  `h` controls the
 trade-off between sub-sampling efficiency (small h is cheap per block)
@@ -224,19 +222,18 @@ the K=3 synthetic.
 - `ridge` τ — Too small makes the ridge ill-conditioned on high-dimensional
   block features; too large biases the predictor toward zero, in which
   case online TASS reduces to uniform sampling.  We tuned this on the
-  synthetic K=3 sweep and use τ=50 throughout.
+  synthetic K=3 sweep and use τ=50 throughout the paper.
 - `discount` ρ ∈ (0,1) — How aggressively old sufficient statistics
   decay.  Smaller ρ tracks parameter drift faster but raises Monte
   Carlo variance; larger ρ is more conservative but slower to adapt.
-  We use ρ=0.99 (effective horizon ≈ 100 SGLD steps).  When the
+  The paper uses ρ=0.99 (effective horizon ≈ 100 SGLD steps).  When the
   staleness diagnostic `staleness_group` in the run CSVs grows fast,
   prefer a smaller ρ.
 - `lambda_floor` λ — The uniform-mixing floor.  Provides a finite-variance
   guarantee on the inverse-probability estimator and acts as
   exploration noise so the ridge cannot collapse onto a single block.
   λ=0.05 is the right order of magnitude; values much smaller risk
-  pathologically peaked sampling distributions, which is the proximate
-  cause of the proxy-anchored variant under-performing in §6.3.
+  pathologically peaked sampling distributions.
 - `feedback_eps` ε — Avoids `log 0` when a sampled block has zero
   contribution to the group gradient.  Should be a few orders of
   magnitude below the smallest non-zero block-gradient norm; ε=1e-8
@@ -250,11 +247,11 @@ produces near-degenerate labels on noisy data.
 
 **Adapt steps S per parameter update.**  Number of online ridge
 updates per change in θ.  In a real SGLD chain this would be 1 (one
-ridge update per SGLD step); the paper's gradient-RMSE protocol uses
-S=6 (real BTC, §5.3) or S=10 (synthetic K=3, §5.2) to amortize the
-JIT trace and to let the online learner converge before each new θ
-value is evaluated.  If `plain_online_mean_mae` in the run CSVs stays
-large after a sweep, increase S.
+ridge update per SGLD step); the gradient-RMSE protocol in the paper
+uses S=6 (real BTC, §5.3) or S=10 (synthetic K=3, §5.2) to amortize
+the JIT trace and to let the online learner converge before each new
+θ value is evaluated.  If `plain_online_mean_mae` in the run CSVs
+stays large after a sweep, increase S.
 
 **Mini-batch size M per group.**  Number of block gradients evaluated
 per call per group.  Larger M reduces variance but raises wall-clock
